@@ -69,12 +69,12 @@ len_allow_chars     = len(allowed_chars)
 max_name_length     = 10 
 
 # Parameters
-optimizer_name        = 'rmsprop'
+optimizer_name        = 'adagrad'
 g_learning_rate       = 0.0001
 d_learning_rate       = 0.0004
 gan_learning_rate     = 0.0001
 epochs                = 45000
-batch_size            = 8
+batch_size            = 128
 num_samples           = 8
 
 g_dropout             = 0.2
@@ -87,8 +87,8 @@ d_width_modifier      = 0.5  # Generator deep-neuron multiplier.
 
 label_smoothing       = 0.1
 
-g_h_activation          = 'relu' # Activation function for hidden layers.
-d_h_activation          = 'relu'
+g_h_activation          = 'lrelu' # Activation function for hidden layers.
+d_h_activation          = 'lrelu'
 
 generator_activation    = 'sigmoid' 
 
@@ -96,7 +96,7 @@ g_batchnorm             = True
 d_batchnorm             = True
 
 # Discriminator accuracy threshold for retraining.
-d_accuracy_threshold  = 1.1 # 1.1 == always retrain
+d_accuracy_threshold  = 0.98 # 1.1 == always retrain
 
 params = {
     'epochs': epochs,
@@ -135,7 +135,7 @@ But, if you want to grind it out, here's the code:
 import pandas as pd
 import numpy as np
 
-!git clone https://github.com/Ladvien/gan_name_maker
+# !git clone https://github.com/Ladvien/gan_name_maker
 
 if data_set == '6k':
   # ~6k names
@@ -174,7 +174,7 @@ import tensorflow as tf
 
 from keras.layers import Dense, Dropout, Activation, Input, LeakyReLU,\
                                      BatchNormalization, ReLU, Embedding,\
-                                     Lambda, LSTM, TimeDistributed, Reshape
+                                     Lambda, LSTM, TimeDistributed, Flatten
 from keras import Sequential
 from keras.models import Model
 
@@ -182,20 +182,20 @@ from keras.callbacks import History
 
 from keras import backend
 # Personal tools.
-!pip install git+https://github.com/Ladvien/ladvien_ml.git
+# !pip install git+https://github.com/Ladvien/ladvien_ml.git
 from ladvien_ml import FeatureModel
 
 fm = FeatureModel()
 
 """# Setup Weights and Biases"""
 
-#!pip install --upgrade wandb
-#
-#!wandb login 186e8a3df54055bf2ce699bf0e3f5320c9bb29e6
-#import wandb
-#
-#wandb.init(project = 'deep_name_generator',
-#           config = params)
+# !pip install --upgrade wandb
+
+# !wandb login 186e8a3df54055bf2ce699bf0e3f5320c9bb29e6
+import wandb
+
+wandb.init(project = 'deep_name_generator',
+           config = params)
 
 """# Discriminator"""
 
@@ -252,13 +252,16 @@ def generator(num_inputs, output_shape, optimizer, g_activation, g_batchnorm, ge
 
     G = Sequential()
     G.add(Embedding(output_shape, output_shape, input_length = output_shape, dropout = dropout))
-    G.add(LSTM(output_shape, dropout_U = dropout, dropout_W = dropout, return_sequences = True))
-    G.add(LSTM(output_shape, dropout_U = dropout, dropout_W = dropout, return_sequences = True))
-    G.add(LSTM(output_shape, dropout_U = dropout, dropout_W = dropout, return_sequences = True))
-    G.add(TimeDistributed(Dense(1)))
-#    G.add(Lambda(lambda x: backend.squeeze(x, output_shape)))
-#    G.add(Dense(output_shape,activation='sigmoid'))
-    G.compile(loss = 'categorical_crossentropy', optimizer = 'adam')    
+    G.add(LSTM(output_shape, dropout_U = dropout, dropout_W = dropout))
+    if g_batchnorm:
+        G.add(BatchNormalization())
+#    G.add(LSTM(output_shape, dropout_U = dropout, dropout_W = dropout, return_sequences = True))
+#    G.add(LSTM(output_shape, dropout_U = dropout, dropout_W = dropout, return_sequences = True))
+#    G.add(TimeDistributed(Dense(1)))
+#    G.add(Flatten())
+    G.add(Dense(output_shape))
+    G.add(d_activation)
+
     G.compile(optimizer = optimizer, loss = 'categorical_crossentropy')
     G.summary()
     return G
@@ -368,7 +371,7 @@ def retrieve_names_from_sparse_matrix(generated_names, pad_character):
 
   return retrieved_names
 
-!pip install pyjarowinkler
+# !pip install pyjarowinkler
 from pyjarowinkler import distance
 
 # Calculate the generated names similarity to the

@@ -69,19 +69,19 @@ len_allow_chars     = len(allowed_chars)
 max_name_length     = 10 
 
 # Parameters
-optimizer_name        = 'rmsprop'
+optimizer_name        = 'adagrad'
 g_learning_rate       = 0.0001
-d_learning_rate       = 0.0004
+d_learning_rate       = 0.00001
 gan_learning_rate     = 0.0001
 epochs                = 45000
-batch_size            = 8
+batch_size            = 128
 num_samples           = 8
 
-g_dropout             = 0.2
-d_dropout             = 0.2
+g_dropout             = 0.5
+d_dropout             = 0.5
 
-generator_inputs      = 150
-g_width_modifier      = 0.8 # Discriminator deep-neuron multiplier.
+generator_inputs      = 200
+g_width_modifier      = 0.5 # Discriminator deep-neuron multiplier.
 
 d_width_modifier      = 0.5  # Generator deep-neuron multiplier.
 
@@ -92,8 +92,8 @@ d_h_activation          = 'relu'
 
 generator_activation    = 'sigmoid' 
 
-g_batchnorm             = True
-d_batchnorm             = True
+g_batchnorm             = False
+d_batchnorm             = False
 
 # Discriminator accuracy threshold for retraining.
 d_accuracy_threshold  = 1.1 # 1.1 == always retrain
@@ -135,7 +135,7 @@ But, if you want to grind it out, here's the code:
 import pandas as pd
 import numpy as np
 
-!git clone https://github.com/Ladvien/gan_name_maker
+# !git clone https://github.com/Ladvien/gan_name_maker
 
 if data_set == '6k':
   # ~6k names
@@ -177,23 +177,99 @@ from keras.layers import Dense, Dropout, Activation, Input, LeakyReLU,\
 from keras import Sequential
 from keras.models import Model
 
-from keras.callbacks import History 
-
 # Personal tools.
-!pip install git+https://github.com/Ladvien/ladvien_ml.git
+# !pip install git+https://github.com/Ladvien/ladvien_ml.git
 from ladvien_ml import FeatureModel
 
 fm = FeatureModel()
 
 """# Setup Weights and Biases"""
 
-!pip install --upgrade wandb
+# !pip install --upgrade wandb
 
-!wandb login 186e8a3df54055bf2ce699bf0e3f5320c9bb29e6
+# !wandb login 186e8a3df54055bf2ce699bf0e3f5320c9bb29e6
 import wandb
 
 wandb.init(project = 'deep_name_generator',
            config = params)
+
+"""# Evaluation Method"""
+
+def retrieve_names_from_sparse_matrix(generated_names, pad_character):
+  retrieved_names = []
+  for name_index in range(len(generated_names)):
+    generated_name = ''
+    name_array = generated_names[name_index]
+    for char_index in range(max_name_length):
+      
+      # Get A index.
+      first_letter_index = (char_index * len_allow_chars)
+      last_letter_index = (char_index * len_allow_chars + len_allow_chars)
+      char_vector = list(name_array[first_letter_index:last_letter_index])
+      
+      char = allowed_chars[char_vector.index(max(char_vector))]
+
+      if char == pad_character:
+        break
+        
+      generated_name += char
+
+    retrieved_names.append(generated_name)
+
+  return retrieved_names
+
+# !pip install pyjarowinkler
+from pyjarowinkler import distance
+
+# Calculate the generated names similarity to the
+# real names using Jara-Winkler Distance
+def get_jw_similarity_score(generated_names, real_names):
+  real_name_jw_scores = []
+  for generated_name in generated_names:
+    values = []
+    for real_name in real_names:
+      if real_name is None:
+        continue
+      try:
+        values.append(distance.get_jaro_distance(real_name, generated_name, winkler=True, scaling=0.1))
+      except:
+        # If empty string, set a low value.
+        values.append(0.00001)
+    try:
+      real_name_jw_scores.append(sum(values) / len(values))
+    except ZeroDivisionError:
+      real_name_jw_scores.append(0.00001)
+
+    return real_name_jw_scores
+
+
+###########################
+# Custom Loss
+###########################
+# from keras import backend
+# import math
+
+# def model_loss(G, get_jw_similarity_score, retrieve_names_from_sparse_matrix):
+   
+#     # Make Generator inputs.
+#     noise = np.random.normal(0, 1, [num_samples, generator_inputs])
+
+#     # Generate fake names from noise.
+#     generated_names = G.predict(noise)
+#     retrieved_names = retrieve_names_from_sparse_matrix(generated_names, pad_character)
+  
+#     # Get get Jara-Winkler similarity.
+#     retrieved_name_similarity_scores = get_jw_similarity_score(retrieved_names, names_master)
+#     batch_similarity_score = (sum(retrieved_name_similarity_scores) / len(retrieved_name_similarity_scores))
+
+    
+#     def jw_loss(y_true, y_pred):
+#         model_loss = math.mean(backend.mean(y_true * y_pred), (-1 * batch_similarity_score))
+#         return model_loss
+
+#     return jw_loss
+
+
 
 """# Discriminator"""
 
@@ -301,8 +377,7 @@ def create_gan(D, G, g_inputs):
 
 """# Compile"""
 
-from keras import backend
- 
+
 # implementation of wasserstein loss
 def wasserstein_loss(y_true, y_pred):
 	return backend.mean(y_true * y_pred)
@@ -346,7 +421,7 @@ D = discriminator(vectorized_name_length, d_optimizer, d_activation, d_batchnorm
 GAN = create_gan(D, G, generator_inputs)
 
 GAN._name = 'GAN'
-GAN.compile(loss = wasserstein_loss, optimizer = gan_optimizer, metrics=['accuracy'])
+GAN.compile(loss = 'binary_crossentropy', optimizer = gan_optimizer, metrics=['accuracy'])
 GAN.summary()
 
 wandb.save('model.h5')
@@ -370,54 +445,6 @@ x_train, x_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, rando
 
 column_names = df.iloc[:,0:-1].columns.tolist()
 
-"""# Evaluation Method"""
-
-def retrieve_names_from_sparse_matrix(generated_names, pad_character):
-  retrieved_names = []
-  for name_index in range(len(generated_names)):
-    generated_name = ''
-    name_array = generated_names[name_index]
-    for char_index in range(max_name_length):
-      
-      # Get A index.
-      first_letter_index = (char_index * len_allow_chars)
-      last_letter_index = (char_index * len_allow_chars + len_allow_chars)
-      char_vector = list(name_array[first_letter_index:last_letter_index])
-      
-      char = allowed_chars[char_vector.index(max(char_vector))]
-
-      if char == pad_character:
-        break
-        
-      generated_name += char
-
-    retrieved_names.append(generated_name)
-
-  return retrieved_names
-
-!pip install pyjarowinkler
-from pyjarowinkler import distance
-
-# Calculate the generated names similarity to the
-# real names using Jara-Winkler Distance
-def get_jw_similarity_score(generated_names, real_names):
-  real_name_jw_scores = []
-  for generated_name in generated_names:
-    values = []
-    for real_name in real_names:
-      if real_name is None:
-        continue
-      try:
-        values.append(distance.get_jaro_distance(real_name, generated_name, winkler=True, scaling=0.1))
-      except:
-        # If empty string, set a low value.
-        values.append(0.00001)
-    try:
-      real_name_jw_scores.append(sum(values) / len(values))
-    except ZeroDivisionError:
-      real_name_jw_scores.append(0.00001)
-
-    return real_name_jw_scores
 
 """# Training"""
 
